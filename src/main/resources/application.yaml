@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: paymentservice
+  datasource:
+    url: jdbc:mysql://localhost:3306/payment_db
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+
+server:
+  port: 8085
+  servlet:
+    context-path: /api
+
+# Payment Service Configuration
+payment:
+  stripe:
+    api-key: ${STRIPE_API_KEY:sk_test_}
+    webhook-secret: ${STRIPE_WEBHOOK_SECRET:whsec_}
+  vnpay:
+    api-key: ${VNPAY_API_KEY:}
+    tmn-code: ${VNPAY_TMN_CODE:}
