@@ -15,9 +15,11 @@ public class SecurityConfig {
         http
             .csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/webhooks/**").permitAll()
-                .requestMatchers("/api/payments/**").authenticated()
-                .anyRequest().authenticated()
+                .requestMatchers("/api/payments/create").permitAll()
+                .requestMatchers("/api/payments/vnpay/callback").permitAll()
+                .requestMatchers("/api/payments/*").permitAll()
+                .requestMatchers("/api/payments/order/*").permitAll()
+                .anyRequest().permitAll()
             )
             .httpBasic(basic -> {});
 

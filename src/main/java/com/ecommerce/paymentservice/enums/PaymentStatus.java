@@ -2,11 +2,9 @@ package com.ecommerce.paymentservice.enums;
 
 public enum PaymentStatus {
     PENDING,
-    PROCESSING,
-    COMPLETED,
+    SUCCESS,
     FAILED,
-    REFUNDED,
-    PARTIALLY_REFUNDED,
-    CANCELLED
+    CANCELLED,
+    REFUNDED
 }
 

@@ -1,0 +1,31 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:paymentdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+order-service:
+  url: http://localhost:8084
+
+vnpay:
+  tmn-code: TEST
+  hash-secret: TEST
+  url: https://sandbox.vnpayment.vn/paymentv2/vpcpay.html
+  return-url: http://localhost:8085/api/payments/vnpay/callback
+  version: 2.1.0
+  command: pay
+
+frontend:
+  url: http://localhost:3000
+
+eureka:
+  client:
+    enabled: false
+
