@@ -8,21 +8,28 @@ import org.springframework.stereotype.Component;
 public class PaymentMapper {
 
     public PaymentResponse toResponse(Payment payment) {
+        return toResponse(payment, null);
+    }
+
+    public PaymentResponse toResponse(Payment payment, String paymentUrl) {
         if (payment == null) {
             return null;
         }
 
         return PaymentResponse.builder()
                 .id(payment.getId())
+                .paymentNumber(payment.getPaymentNumber())
                 .orderId(payment.getOrderId())
-                .userId(payment.getUserId())
+                .orderNumber(payment.getOrderNumber())
                 .amount(payment.getAmount())
                 .currency(payment.getCurrency())
+                .paymentMethod(payment.getPaymentMethod())
                 .status(payment.getStatus())
-                .provider(payment.getProvider())
+                .vnpayTransactionNo(payment.getVnpayTransactionNo())
                 .transactionId(payment.getTransactionId())
+                .paymentUrl(paymentUrl)
                 .createdAt(payment.getCreatedAt())
-                .updatedAt(payment.getUpdatedAt())
+                .paidAt(payment.getPaidAt())
                 .build();
     }
 }

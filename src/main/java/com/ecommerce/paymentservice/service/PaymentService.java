@@ -1,25 +1,23 @@
 package com.ecommerce.paymentservice.service;
 
-import com.ecommerce.paymentservice.dto.request.ConfirmPaymentRequest;
 import com.ecommerce.paymentservice.dto.request.CreatePaymentRequest;
-import com.ecommerce.paymentservice.dto.request.RefundRequest;
-import com.ecommerce.paymentservice.dto.response.PaymentIntentResponse;
 import com.ecommerce.paymentservice.dto.response.PaymentResponse;
 import com.ecommerce.paymentservice.entity.Payment;
-import com.ecommerce.paymentservice.entity.PaymentTransaction;
-import com.ecommerce.paymentservice.enums.PaymentProvider;
+import com.ecommerce.paymentservice.enums.PaymentMethod;
 import com.ecommerce.paymentservice.enums.PaymentStatus;
-import com.ecommerce.paymentservice.exception.PaymentException;
+import com.ecommerce.paymentservice.exception.PaymentNotFoundException;
 import com.ecommerce.paymentservice.mapper.PaymentMapper;
 import com.ecommerce.paymentservice.repository.PaymentRepository;
-import com.ecommerce.paymentservice.repository.PaymentTransactionRepository;
-import com.stripe.model.PaymentIntent;
-import com.stripe.model.Refund;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
-import java.util.UUID;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.Map;
 
 @Service
 @Slf4j
@@ -27,218 +25,136 @@ import java.util.UUID;
 public class PaymentService {
 
     private final PaymentRepository paymentRepository;
-    private final PaymentTransactionRepository paymentTransactionRepository;
-    private final StripePaymentService stripePaymentService;
+    private final VNPayPaymentService vnPayPaymentService;
+    private final WebClient orderServiceClient;
     private final PaymentMapper paymentMapper;
 
     public PaymentService(PaymentRepository paymentRepository,
-                         PaymentTransactionRepository paymentTransactionRepository,
-                         StripePaymentService stripePaymentService,
+                         VNPayPaymentService vnPayPaymentService,
+                         WebClient orderServiceClient,
                          PaymentMapper paymentMapper) {
         this.paymentRepository = paymentRepository;
-        this.paymentTransactionRepository = paymentTransactionRepository;
-        this.stripePaymentService = stripePaymentService;
+        this.vnPayPaymentService = vnPayPaymentService;
+        this.orderServiceClient = orderServiceClient;
         this.paymentMapper = paymentMapper;
     }
 
-    public PaymentIntentResponse createPaymentIntent(CreatePaymentRequest request) {
-        try {
-            // Validate request
-            if (request.getAmount() == null || request.getAmount().signum() <= 0) {
-                throw new PaymentException("Amount must be greater than 0", "INVALID_AMOUNT", 400);
-            }
+    public PaymentResponse createPayment(CreatePaymentRequest request, String ipAddress) {
+        Payment payment = Payment.builder()
+                .paymentNumber(generatePaymentNumber())
+                .orderId(request.getOrderId())
+                .orderNumber(request.getOrderNumber())
+                .userId(request.getUserId())
+                .amount(request.getAmount())
+                .currency("VND")
+                .paymentMethod(request.getPaymentMethod())
+                .status(PaymentStatus.PENDING)
+                .description(request.getDescription())
+                .build();
 
-            if (request.getProvider() == null) {
-                throw new PaymentException("Payment provider is required", "INVALID_PROVIDER", 400);
-            }
+        Payment savedPayment = paymentRepository.save(payment);
+        log.info("Created payment: paymentNumber={}, method={}", savedPayment.getPaymentNumber(), savedPayment.getPaymentMethod());
 
-            // Create payment intent with provider
-            PaymentIntentResponse intentResponse = null;
-
-            if (request.getProvider() == PaymentProvider.STRIPE) {
-                intentResponse = stripePaymentService.createPaymentIntent(
-                        request.getAmount(),
-                        request.getCurrency() != null ? request.getCurrency() : "USD",
-                        request.getOrderId()
-                );
-            } else {
-                throw new PaymentException("Unsupported payment provider", "UNSUPPORTED_PROVIDER", 400);
-            }
-
-            // Save payment record
-            Payment payment = Payment.builder()
-                    .orderId(request.getOrderId())
-                    .userId(request.getUserId())
-                    .amount(request.getAmount())
-                    .currency(request.getCurrency() != null ? request.getCurrency() : "USD")
-                    .method(request.getMethod())
-                    .status(PaymentStatus.PENDING)
-                    .provider(request.getProvider())
-                    .transactionId(intentResponse.getPaymentIntentId())
-                    .metadata(request.getMetadata())
-                    .build();
-
-            paymentRepository.save(payment);
-
-            log.info("Payment intent created for orderId: {}", request.getOrderId());
-            return intentResponse;
-        } catch (PaymentException e) {
-            log.error("Payment exception: {}", e.getMessage());
-            throw e;
-        } catch (Exception e) {
-            log.error("Unexpected error creating payment intent: {}", e.getMessage());
-            throw new PaymentException("Failed to create payment intent", "INTERNAL_ERROR", 500);
+        if (savedPayment.getPaymentMethod() == PaymentMethod.VNPAY) {
+            String paymentUrl = vnPayPaymentService.createPaymentUrl(savedPayment, ipAddress);
+            return paymentMapper.toResponse(savedPayment, paymentUrl);
         }
+
+        return paymentMapper.toResponse(savedPayment);
     }
 
-    public PaymentResponse confirmPayment(String paymentId, ConfirmPaymentRequest request) {
-        try {
-            UUID id = UUID.fromString(paymentId);
-            Payment payment = paymentRepository.findById(id)
-                    .orElseThrow(() -> new PaymentException("Payment not found", "PAYMENT_NOT_FOUND", 404));
-
-            // Confirm with payment provider
-            PaymentIntent paymentIntent = null;
-
-            if (payment.getProvider() == PaymentProvider.STRIPE) {
-                paymentIntent = stripePaymentService.confirmPayment(request.getPaymentIntentId());
-            }
-
-            // Update payment status based on provider response
-            if (paymentIntent != null) {
-                String status = paymentIntent.getStatus();
-                if ("succeeded".equals(status)) {
-                    payment.setStatus(PaymentStatus.COMPLETED);
-                } else if ("processing".equals(status)) {
-                    payment.setStatus(PaymentStatus.PROCESSING);
-                } else if ("requires_action".equals(status) || "requires_payment_method".equals(status)) {
-                    payment.setStatus(PaymentStatus.PENDING);
-                } else {
-                    payment.setStatus(PaymentStatus.FAILED);
-                }
-            }
-
-            // Save transaction record
-            PaymentTransaction transaction = PaymentTransaction.builder()
-                    .payment(payment)
-                    .transactionCode(request.getPaymentIntentId())
-                    .status(payment.getStatus())
-                    .amount(payment.getAmount())
-                    .description("Payment confirmation")
-                    .response(paymentIntent != null ? paymentIntent.toJson().toString() : "")
-                    .build();
-
-            paymentTransactionRepository.save(transaction);
-            paymentRepository.save(payment);
-
-            log.info("Payment confirmed for paymentId: {}", paymentId);
-            return paymentMapper.toResponse(payment);
-        } catch (PaymentException e) {
-            log.error("Payment exception: {}", e.getMessage());
-            throw e;
-        } catch (Exception e) {
-            log.error("Unexpected error confirming payment: {}", e.getMessage());
-            throw new PaymentException("Failed to confirm payment", "INTERNAL_ERROR", 500);
-        }
+    @Transactional(readOnly = true)
+    public PaymentResponse getPaymentById(Long id) {
+        Payment payment = paymentRepository.findById(id)
+                .orElseThrow(() -> new PaymentNotFoundException("Payment not found with id: " + id));
+        return paymentMapper.toResponse(payment);
     }
 
-    public PaymentResponse refundPayment(String paymentId, RefundRequest request) {
-        try {
-            UUID id = UUID.fromString(paymentId);
-            Payment payment = paymentRepository.findById(id)
-                    .orElseThrow(() -> new PaymentException("Payment not found", "PAYMENT_NOT_FOUND", 404));
-
-            if (payment.getStatus() != PaymentStatus.COMPLETED) {
-                throw new PaymentException("Can only refund completed payments", "INVALID_PAYMENT_STATUS", 400);
-            }
-
-            // Process refund with provider
-            if (payment.getProvider() == PaymentProvider.STRIPE) {
-                Refund refund = null;
-                if (request.getAmount() != null) {
-                    refund = stripePaymentService.refundPayment(payment.getTransactionId(), request.getAmount());
-                } else {
-                    refund = stripePaymentService.refundPayment(payment.getTransactionId());
-                }
-
-                if (refund != null) {
-                    if ("succeeded".equals(refund.getStatus())) {
-                        payment.setStatus(PaymentStatus.REFUNDED);
-                    } else {
-                        payment.setStatus(PaymentStatus.PARTIALLY_REFUNDED);
-                    }
-                }
-            }
-
-            // Save transaction record
-            PaymentTransaction transaction = PaymentTransaction.builder()
-                    .payment(payment)
-                    .transactionCode(payment.getTransactionId())
-                    .status(payment.getStatus())
-                    .amount(request.getAmount() != null ? request.getAmount() : payment.getAmount())
-                    .description("Refund: " + request.getReason())
-                    .build();
-
-            paymentTransactionRepository.save(transaction);
-            paymentRepository.save(payment);
-
-            log.info("Payment refunded for paymentId: {}", paymentId);
-            return paymentMapper.toResponse(payment);
-        } catch (PaymentException e) {
-            log.error("Payment exception: {}", e.getMessage());
-            throw e;
-        } catch (Exception e) {
-            log.error("Unexpected error refunding payment: {}", e.getMessage());
-            throw new PaymentException("Failed to refund payment", "INTERNAL_ERROR", 500);
-        }
-    }
-
-    public PaymentResponse getPaymentById(String paymentId) {
-        try {
-            UUID id = UUID.fromString(paymentId);
-            Payment payment = paymentRepository.findById(id)
-                    .orElseThrow(() -> new PaymentException("Payment not found", "PAYMENT_NOT_FOUND", 404));
-
-            return paymentMapper.toResponse(payment);
-        } catch (PaymentException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Unexpected error fetching payment: {}", e.getMessage());
-            throw new PaymentException("Failed to fetch payment", "INTERNAL_ERROR", 500);
-        }
-    }
-
+    @Transactional(readOnly = true)
     public PaymentResponse getPaymentByOrderId(String orderId) {
-        try {
-            Payment payment = paymentRepository.findByOrderId(orderId)
-                    .orElseThrow(() -> new PaymentException("Payment not found for order", "PAYMENT_NOT_FOUND", 404));
-
-            return paymentMapper.toResponse(payment);
-        } catch (PaymentException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Unexpected error fetching payment by orderId: {}", e.getMessage());
-            throw new PaymentException("Failed to fetch payment", "INTERNAL_ERROR", 500);
-        }
+        Payment payment = paymentRepository.findByOrderId(orderId)
+                .orElseThrow(() -> new PaymentNotFoundException("Payment not found for orderId: " + orderId));
+        return paymentMapper.toResponse(payment);
     }
 
-    public void handleWebhook(PaymentProvider provider, String payload, String signature) {
-        try {
-            if (provider == PaymentProvider.STRIPE) {
-                if (!stripePaymentService.verifyWebhookSignature(payload, signature)) {
-                    throw new PaymentException("Invalid webhook signature", "INVALID_SIGNATURE", 401);
-                }
+    public PaymentResponse confirmPayment(String paymentNumber) {
+        Payment payment = paymentRepository.findByPaymentNumber(paymentNumber)
+                .orElseThrow(() -> new PaymentNotFoundException("Payment not found with paymentNumber: " + paymentNumber));
 
-                // Parse and process webhook event
-                log.info("Valid Stripe webhook received");
+        if (payment.getStatus() == PaymentStatus.SUCCESS) {
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("paymentId", payment.getPaymentNumber());
+            requestBody.put("status", "SUCCESS");
+
+            try {
+                orderServiceClient.post()
+                        .uri("/api/orders/{orderId}/payment-confirmed", payment.getOrderId())
+                        .bodyValue(requestBody)
+                        .retrieve()
+                        .toBodilessEntity()
+                        .block();
+                log.info("Notified order-service for orderId={} paymentNumber={}", payment.getOrderId(), paymentNumber);
+            } catch (WebClientResponseException e) {
+                log.error("Order service callback failed: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
+            } catch (Exception e) {
+                log.error("Order service callback failed for paymentNumber={}: {}", paymentNumber, e.getMessage());
             }
-        } catch (PaymentException e) {
-            log.error("Webhook processing error: {}", e.getMessage());
-            throw e;
-        } catch (Exception e) {
-            log.error("Unexpected error processing webhook: {}", e.getMessage());
-            throw new PaymentException("Failed to process webhook", "INTERNAL_ERROR", 500);
         }
+
+        return paymentMapper.toResponse(payment);
+    }
+
+    // MIGRATION: New REST API endpoint (replaces Kafka events)
+    // Called when delivery is completed for COD payments
+    public PaymentResponse updatePaymentStatus(String orderId, String newStatus) {
+        Payment payment = paymentRepository.findByOrderId(orderId)
+                .orElseThrow(() -> new PaymentNotFoundException("Payment not found for orderId: " + orderId));
+
+        PaymentStatus statusEnum;
+        try {
+            statusEnum = PaymentStatus.valueOf(newStatus.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new PaymentNotFoundException("Invalid status: " + newStatus);
+        }
+
+        payment.setStatus(statusEnum);
+        Payment savedPayment = paymentRepository.save(payment);
+        
+        if (statusEnum == PaymentStatus.SUCCESS) {
+            // Notify Order Service about payment success
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("paymentId", savedPayment.getPaymentNumber());
+            requestBody.put("status", "SUCCESS");
+
+            try {
+                orderServiceClient.post()
+                        .uri("/api/orders/{orderId}/payment-confirmed", orderId)
+                        .bodyValue(requestBody)
+                        .retrieve()
+                        .toBodilessEntity()
+                        .block();
+                log.info("Notified order-service for successful delivery: orderId={}, paymentNumber={}", 
+                        orderId, savedPayment.getPaymentNumber());
+            } catch (WebClientResponseException e) {
+                log.error("Order service callback failed: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
+            } catch (Exception e) {
+                log.error("Order service callback failed for orderId={}: {}", orderId, e.getMessage());
+            }
+        }
+
+        return paymentMapper.toResponse(savedPayment);
+    }
+
+    private String generatePaymentNumber() {
+        String datePart = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
+        String randomPart;
+        String paymentNumber;
+        do {
+            randomPart = com.ecommerce.paymentservice.util.VNPayUtil.getRandomNumber(4);
+            paymentNumber = "PAY-" + datePart + "-" + randomPart;
+        } while (paymentRepository.findByPaymentNumber(paymentNumber).isPresent());
+
+        return paymentNumber;
     }
 }
 
