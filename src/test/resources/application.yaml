@@ -25,7 +25,3 @@ vnpay:
 frontend:
   url: http://localhost:3000
 
-eureka:
-  client:
-    enabled: false
-

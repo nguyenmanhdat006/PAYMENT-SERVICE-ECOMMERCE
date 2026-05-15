@@ -86,12 +86,6 @@
 			<version>1.5.5.Final</version>
 		</dependency>
 
-		<!-- Service discovery -->
-		<dependency>
-			<groupId>org.springframework.cloud</groupId>
-			<artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
-		</dependency>
-
 		<!-- Stripe -->
 		<dependency>
 			<groupId>com.stripe</groupId>
