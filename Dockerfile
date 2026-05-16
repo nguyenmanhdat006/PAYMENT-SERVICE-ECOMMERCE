@@ -1,18 +1,23 @@
-FROM eclipse-temurin:17-jdk-alpine
+FROM maven:3.9.9-eclipse-temurin-17 AS builder
+WORKDIR /workspace
 
+COPY pom.xml .
+RUN mvn -B -ntp dependency:go-offline
+
+COPY src ./src
+RUN mvn -B -ntp clean package -DskipTests \
+    && find target -maxdepth 1 -type f -name "*.jar" ! -name "*.original" -exec cp {} /workspace/app.jar \;
+
+FROM eclipse-temurin:17-jre AS runtime
 WORKDIR /app
 
-COPY target/paymentservice-0.0.1-SNAPSHOT.jar payment-service.jar
+RUN useradd --system --create-home --uid 1001 appuser
+USER appuser
 
-EXPOSE 8085
+COPY --from=builder /workspace/app.jar ./app.jar
+COPY ca.pem ./ca.pem
 
-ENV STRIPE_API_KEY=${STRIPE_API_KEY}
-ENV STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
-ENV VNPAY_API_KEY=${VNPAY_API_KEY}
-ENV VNPAY_TMN_CODE=${VNPAY_TMN_CODE}
-ENV SPRING_DATASOURCE_URL=${SPRING_DATASOURCE_URL:-jdbc:mysql://localhost:3306/payment_db}
-ENV SPRING_DATASOURCE_USERNAME=${SPRING_DATASOURCE_USERNAME:-root}
-ENV SPRING_DATASOURCE_PASSWORD=${SPRING_DATASOURCE_PASSWORD:-root}
-
-ENTRYPOINT ["java", "-jar", "payment-service.jar"]
+EXPOSE 8081
+ENV JAVA_OPTS=""
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]
 
