@@ -34,7 +34,7 @@ public class VNPayCallbackController {
         try {
             Payment payment = vnPayPaymentService.processCallback(params);
             if (payment.getStatus() == PaymentStatus.SUCCESS) {
-                paymentService.confirmPayment(payment.getPaymentNumber());
+                paymentService.markPaymentSuccess(payment.getOrderNumber(), payment.getTransactionId());
             }
 
             return new RedirectView(buildRedirectUrl(payment));

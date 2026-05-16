@@ -15,6 +15,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
@@ -49,7 +50,6 @@ public class PaymentService {
                 .currency("VND")
                 .paymentMethod(request.getPaymentMethod())
                 .status(PaymentStatus.PENDING)
-                .description(request.getDescription())
                 .build();
 
         Payment savedPayment = paymentRepository.save(payment);
@@ -71,9 +71,9 @@ public class PaymentService {
     }
 
     @Transactional(readOnly = true)
-    public PaymentResponse getPaymentByOrderId(String orderId) {
-        Payment payment = paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new PaymentNotFoundException("Payment not found for orderId: " + orderId));
+    public PaymentResponse getPaymentByOrderNumber(String orderNumber) {
+        Payment payment = paymentRepository.findByOrderNumber(orderNumber)
+                .orElseThrow(() -> new PaymentNotFoundException("Payment not found for orderNumber: " + orderNumber));
         return paymentMapper.toResponse(payment);
     }
 
@@ -81,65 +81,44 @@ public class PaymentService {
         Payment payment = paymentRepository.findByPaymentNumber(paymentNumber)
                 .orElseThrow(() -> new PaymentNotFoundException("Payment not found with paymentNumber: " + paymentNumber));
 
-        if (payment.getStatus() == PaymentStatus.SUCCESS) {
-            Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("paymentId", payment.getPaymentNumber());
-            requestBody.put("status", "SUCCESS");
-
-            try {
-                orderServiceClient.post()
-                        .uri("/api/orders/{orderId}/payment-confirmed", payment.getOrderId())
-                        .bodyValue(requestBody)
-                        .retrieve()
-                        .toBodilessEntity()
-                        .block();
-                log.info("Notified order-service for orderId={} paymentNumber={}", payment.getOrderId(), paymentNumber);
-            } catch (WebClientResponseException e) {
-                log.error("Order service callback failed: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
-            } catch (Exception e) {
-                log.error("Order service callback failed for paymentNumber={}: {}", paymentNumber, e.getMessage());
-            }
+        if (payment.getStatus() != PaymentStatus.SUCCESS) {
+            payment.setStatus(PaymentStatus.SUCCESS);
+            payment.setPaidAt(LocalDateTime.now());
+            paymentRepository.save(payment);
         }
 
-        return paymentMapper.toResponse(payment);
+        return markPaymentSuccess(payment.getOrderNumber(), payment.getTransactionId());
     }
 
-    // MIGRATION: New REST API endpoint (replaces Kafka events)
-    // Called when delivery is completed for COD payments
-    public PaymentResponse updatePaymentStatus(String orderId, String newStatus) {
-        Payment payment = paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> new PaymentNotFoundException("Payment not found for orderId: " + orderId));
+    public PaymentResponse markPaymentSuccess(String orderNumber, String transactionId) {
+        Payment payment = paymentRepository.findByOrderNumber(orderNumber)
+                .orElseThrow(() -> new PaymentNotFoundException("Payment not found for orderNumber: " + orderNumber));
 
-        PaymentStatus statusEnum;
-        try {
-            statusEnum = PaymentStatus.valueOf(newStatus.toUpperCase());
-        } catch (IllegalArgumentException e) {
-            throw new PaymentNotFoundException("Invalid status: " + newStatus);
+        payment.setStatus(PaymentStatus.SUCCESS);
+        if (transactionId != null && !transactionId.isBlank()) {
+            payment.setTransactionId(transactionId);
+            payment.setVnpayTransactionNo(transactionId);
         }
-
-        payment.setStatus(statusEnum);
+        payment.setPaidAt(LocalDateTime.now());
         Payment savedPayment = paymentRepository.save(payment);
-        
-        if (statusEnum == PaymentStatus.SUCCESS) {
-            // Notify Order Service about payment success
-            Map<String, Object> requestBody = new HashMap<>();
-            requestBody.put("paymentId", savedPayment.getPaymentNumber());
-            requestBody.put("status", "SUCCESS");
 
-            try {
-                orderServiceClient.post()
-                        .uri("/api/orders/{orderId}/payment-confirmed", orderId)
-                        .bodyValue(requestBody)
-                        .retrieve()
-                        .toBodilessEntity()
-                        .block();
-                log.info("Notified order-service for successful delivery: orderId={}, paymentNumber={}", 
-                        orderId, savedPayment.getPaymentNumber());
-            } catch (WebClientResponseException e) {
-                log.error("Order service callback failed: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
-            } catch (Exception e) {
-                log.error("Order service callback failed for orderId={}: {}", orderId, e.getMessage());
-            }
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("paymentNumber", savedPayment.getPaymentNumber());
+        requestBody.put("transactionId", savedPayment.getTransactionId());
+
+        try {
+            orderServiceClient.put()
+                    .uri("/api/orders/{orderId}/payment-confirmed", savedPayment.getOrderId())
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .toBodilessEntity()
+                    .block();
+            log.info("Notified order-service for successful payment: orderNumber={}, paymentNumber={}",
+                    orderNumber, savedPayment.getPaymentNumber());
+        } catch (WebClientResponseException e) {
+            log.error("Order service callback failed: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString());
+        } catch (Exception e) {
+            log.error("Order service callback failed for orderNumber={}: {}", orderNumber, e.getMessage());
         }
 
         return paymentMapper.toResponse(savedPayment);
