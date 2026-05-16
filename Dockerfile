@@ -1,6 +1,11 @@
 FROM eclipse-temurin:17-jdk-alpine AS builder
 
-WORKDIR /app
+COPY pom.xml .
+RUN mvn -B -ntp dependency:go-offline
+
+COPY src ./src
+RUN mvn -B -ntp clean package -DskipTests \
+    && find target -maxdepth 1 -type f -name "*.jar" ! -name "*.original" -exec cp {} /workspace/app.jar \;
 
 COPY .mvn/ .mvn/
 COPY mvnw pom.xml ./
