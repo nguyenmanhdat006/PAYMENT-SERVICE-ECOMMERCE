@@ -25,11 +25,8 @@ public class PaymentMapper {
                 .currency(payment.getCurrency())
                 .paymentMethod(payment.getPaymentMethod())
                 .status(payment.getStatus())
-                .vnpayTransactionNo(payment.getVnpayTransactionNo())
-                .transactionId(payment.getTransactionId())
                 .paymentUrl(paymentUrl)
                 .createdAt(payment.getCreatedAt())
-                .paidAt(payment.getPaidAt())
                 .build();
     }
 }

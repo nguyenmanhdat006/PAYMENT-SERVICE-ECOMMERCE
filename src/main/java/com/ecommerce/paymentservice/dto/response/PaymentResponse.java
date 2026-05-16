@@ -2,6 +2,7 @@ package com.ecommerce.paymentservice.dto.response;
 
 import com.ecommerce.paymentservice.enums.PaymentMethod;
 import com.ecommerce.paymentservice.enums.PaymentStatus;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -14,6 +15,7 @@ import java.time.LocalDateTime;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class PaymentResponse {
     private Long id;
     private String paymentNumber;
@@ -23,10 +25,7 @@ public class PaymentResponse {
     private String currency;
     private PaymentMethod paymentMethod;
     private PaymentStatus status;
-    private String vnpayTransactionNo;
-    private String transactionId;
     private String paymentUrl;
     private LocalDateTime createdAt;
-    private LocalDateTime paidAt;
 }
 

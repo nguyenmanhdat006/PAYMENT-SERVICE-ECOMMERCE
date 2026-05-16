@@ -34,22 +34,14 @@ public class PaymentController {
 
     @GetMapping("/order/{orderId}")
     public ResponseEntity<PaymentResponse> getPaymentByOrder(@PathVariable String orderId) {
-        log.info("Getting payment by orderId={}", orderId);
-        return ResponseEntity.ok(paymentService.getPaymentByOrderId(orderId));
+        log.info("Getting payment by orderNumber={}", orderId);
+        return ResponseEntity.ok(paymentService.getPaymentByOrderNumber(orderId));
     }
 
-    @PostMapping("/{paymentNumber}/confirm")
-    public ResponseEntity<PaymentResponse> confirmPayment(@PathVariable String paymentNumber) {
-        log.info("Confirming paymentNumber={}", paymentNumber);
-        return ResponseEntity.ok(paymentService.confirmPayment(paymentNumber));
-    }
-
-    @PutMapping("/order/{orderId}/status")
-    public ResponseEntity<PaymentResponse> updatePaymentStatusForOrder(
-            @PathVariable String orderId,
-            @RequestParam String status) {
-        log.info("Updating payment status for orderId={}, newStatus={}", orderId, status);
-        return ResponseEntity.ok(paymentService.updatePaymentStatus(orderId, status));
+    @PutMapping("/order/{orderNumber}/success")
+    public ResponseEntity<PaymentResponse> markPaymentSuccess(@PathVariable String orderNumber) {
+        log.info("Marking payment success for orderNumber={}", orderNumber);
+        return ResponseEntity.ok(paymentService.markPaymentSuccess(orderNumber, null));
     }
 
     private String getClientIp(HttpServletRequest request) {
